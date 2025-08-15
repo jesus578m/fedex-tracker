@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>FedEx – Último estatus (multi-consulta)</title>
+<style>
+  :root {
+    --bg: #0b1220;
+    --panel: #111827;
+    --muted: #9ca3af;
+    --ok: #10b981;
+    --err: #ef4444;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    background: var(--bg);
+    color: #e5e7eb;
+  }
+  header {
+    padding: 16px;
+    background: #0f172a;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  h1 {
+    font-size: 18px;
+    margin: 0;
+    font-weight: 700;
+  }
+  main {
+    max-width: 1100px;
+    margin: 24px auto;
+    padding: 0 16px;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid #1f2937;
+    border-radius: 16px;
+    padding: 16px;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.25);
+  }
+  textarea {
+    width: 100%;
+    min-height: 160px;
+    background: #0b1220;
+    color: #e5e7eb;
+    border: 1px solid #1f2937;
+    border-radius: 12px;
+    padding: 12px;
+    resize: vertical;
+  }
+  .row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+    align-items: center;
+  }
+  button {
+    appearance: none;
+    border: 0;
+    padding: 10px 14px;
+    border-radius: 999px;
+    cursor: pointer;
+    background: #1d4ed8;
+    color: white;
+    font-weight: 600;
+  }
+  button.secondary {
+    background: #374151;
+  }
+  .table-wrap {
+    overflow: auto;
+    margin-top: 16px;
+    border-radius: 12px;
+    border: 1px solid #1f2937;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 800px;
+  }
+  th, td {
+    padding: 10px 12px;
+    border-bottom: 1px solid #1f2937;
+    text-align: left;
+    white-space: nowrap;
+  }
+  tr:last-child td {
+    border-bottom: 0;
+  }
+  .ok { color: var(--ok); font-weight: 700; }
+  .err { color: var(--err); font-weight: 700; }
+  .muted { color: var(--muted); }
+  small { color: var(--muted); }
+</style>
+</head>
+<body>
+  <header>
+    <h1>FedEx – Último estatus (multi-consulta)</h1>
+    <small>Solo pega tus guías (una por línea) y presiona Consultar</small>
+  </header>
+  <main>
+    <div class="card">
+      <label for="nums">Números de guía (uno por línea)</label>
+      <textarea id="nums" placeholder="Ejemplo:
+449044304137821
+782165213024
+012345678901"></textarea>
+
+      <div class="row">
+        <button id="go">Consultar</button>
+        <button id="csv" class="secondary">Exportar CSV</button>
+        <small id="hint" class="muted"></small>
+      </div>
+
+      <div class="table-wrap" id="out" style="display:none;">
+        <table id="tbl">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Estatus</th>
+              <th>Fecha/Hora (local mostrada por FedEx)</th>
+              <th>Lugar</th>
+              <th>¿Entregado?</th>
+              <th>Servicio</th>
+              <th>Mensaje</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+
+<script>
+const $ = (q) => document.querySelector(q);
+
+$("#go").addEventListener("click", async () => {
+  const lines = $("#nums").value
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (!lines.length) {
+    alert("Pega al menos un número de guía.");
+    return;
+  }
+  $("#hint").textContent =
+    "Consultando… (puede tardar unos segundos si son muchas)";
+  $("#go").disabled = true;
+  try {
+    // Determine API endpoint based on origin: if running from file:// fallback to local server
+    const API = location.origin.startsWith("http")
+      ? "/api/track"
+      : "http://localhost:3000/api/track";
+    const res = await fetch(API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ numbers: lines }),
+    });
+    const json = await res.json();
+    const tbody = $("#tbl tbody");
+    tbody.innerHTML = "";
+    (json.results || []).forEach((r) => {
+      const tr = document.createElement("tr");
+      const td = (text) => {
+        const x = document.createElement("td");
+        x.textContent = text ?? "";
+        return x;
+      };
+      tr.appendChild(td(r.trackingNumber));
+      tr.appendChild(td(r.ok ? r.lastStatus : "—"));
+      tr.appendChild(td(r.ok ? r.lastUpdateLocal : "—"));
+      tr.appendChild(td(r.ok ? r.location : "—"));
+      tr.appendChild(td(r.ok ? (r.delivered ? "Sí" : "No") : "—"));
+      tr.appendChild(td(r.ok ? r.service : ""));
+      const msg = document.createElement("td");
+      msg.innerHTML = r.ok
+        ? `<span class="ok">OK</span>`
+        : `<span class="err">${r.error}</span>`;
+      tr.appendChild(msg);
+      tbody.appendChild(tr);
+    });
+    $("#out").style.display = "block";
+    $("#hint").textContent = `Listo: ${json.count} guías`;
+  } catch (e) {
+    $("#hint").textContent = "Error consultando. Reintenta.";
+    alert(e);
+  } finally {
+    $("#go").disabled = false;
+  }
+});
+
+// Export results to CSV
+$("#csv").addEventListener("click", () => {
+  const rows = [
+    [
+      "trackingNumber",
+      "status",
+      "fechaHoraLocal",
+      "lugar",
+      "entregado",
+      "servicio",
+      "mensaje",
+    ],
+  ];
+  document.querySelectorAll("#tbl tbody tr").forEach((tr) => {
+    const tds = tr.querySelectorAll("td");
+    rows.push(
+      Array.from(tds).map((td) =>
+        (td.textContent || "").replace(/\s+/g, " ").trim()
+      )
+    );
+  });
+  const csv = rows
+    .map((r) => r.map((v) => `"${(v || "").replace(/"/g, '""')}"`).join(","))
+    .join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "fedex_ultimos_estatus.csv";
+  a.click();
+  URL.revokeObjectURL(url);
+});
+</script>
+</body>
+</html>
