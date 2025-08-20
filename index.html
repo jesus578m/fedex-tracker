@@ -71,9 +71,7 @@
     color: white;
     font-weight: 600;
   }
-  button.secondary {
-    background: #374151;
-  }
+  button.secondary { background: #374151; }
   .table-wrap {
     overflow: auto;
     margin-top: 16px;
@@ -91,13 +89,12 @@
     text-align: left;
     white-space: nowrap;
   }
-  tr:last-child td {
-    border-bottom: 0;
-  }
+  tr:last-child td { border-bottom: 0; }
   .ok { color: var(--ok); font-weight: 700; }
   .err { color: var(--err); font-weight: 700; }
   .muted { color: var(--muted); }
   small { color: var(--muted); }
+  a.link { color:#60a5fa; text-decoration:none; }
 </style>
 </head>
 <body>
@@ -105,6 +102,7 @@
     <h1>FedEx – Último estatus (multi-consulta)</h1>
     <small>Solo pega tus guías (una por línea) y presiona Consultar</small>
   </header>
+
   <main>
     <div class="card">
       <label for="nums">Números de guía (uno por línea)</label>
@@ -116,6 +114,7 @@
       <div class="row">
         <button id="go">Consultar</button>
         <button id="csv" class="secondary">Exportar CSV</button>
+        <button id="openAll" class="secondary" title="Abrir todos los enlaces en pestañas (máx. 10)">Abrir 10</button>
         <small id="hint" class="muted"></small>
       </div>
 
@@ -141,92 +140,133 @@
 <script>
 const $ = (q) => document.querySelector(q);
 
-$("#go").addEventListener("click", async () => {
-  const lines = $("#nums").value
-    .split(/\r?\n/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-  if (!lines.length) {
-    alert("Pega al menos un número de guía.");
-    return;
+// Utilidades
+const parseLines = () =>
+  $("#nums").value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+
+const fedexLink = (num) =>
+  `https://www.fedex.com/fedextrack/?trknbr=${encodeURIComponent(num)}`;
+
+// Modo API disponible: intenta POST a /api/track y valida que sea JSON
+async function tryTrackAPI(numbers) {
+  // Si estás en file:// usa localhost; si no, usa relativo
+  const API = location.origin.startsWith("http")
+    ? "/api/track"
+    : "http://localhost:3000/api/track";
+
+  const res = await fetch(API, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ numbers })
+  });
+
+  // Comprueba que la respuesta sea JSON (evita el error de token '<')
+  const ct = res.headers.get("content-type") || "";
+  if (!ct.includes("application/json")) {
+    throw new Error("La respuesta no es JSON (probablemente HTML de GitHub Pages).");
   }
-  $("#hint").textContent =
-    "Consultando… (puede tardar unos segundos si son muchas)";
+  return res.json();
+}
+
+function paintRowsFromAPI(results) {
+  const tbody = $("#tbl tbody");
+  tbody.innerHTML = "";
+  (results || []).forEach((r) => {
+    const tr = document.createElement("tr");
+    const td = (text, html=false) => {
+      const x = document.createElement("td");
+      if (html) x.innerHTML = text ?? "";
+      else x.textContent = text ?? "";
+      return x;
+    };
+    tr.appendChild(td(r.trackingNumber));
+    tr.appendChild(td(r.ok ? r.lastStatus : "—"));
+    tr.appendChild(td(r.ok ? r.lastUpdateLocal : "—"));
+    tr.appendChild(td(r.ok ? r.location : "—"));
+    tr.appendChild(td(r.ok ? (r.delivered ? "Sí" : "No") : "—"));
+    tr.appendChild(td(r.ok ? r.service : "—"));
+    const msg = r.ok ? `<span class="ok">OK</span>`
+                     : `<span class="err">${(r.error||"").toString()}</span>`;
+    tr.appendChild(td(msg, true));
+    $("#tbl tbody").appendChild(tr);
+  });
+}
+
+// Modo estático: sin API, solo enlaces clicables
+function paintRowsStatic(numbers) {
+  const tbody = $("#tbl tbody");
+  tbody.innerHTML = "";
+  numbers.forEach(num => {
+    const tr = document.createElement("tr");
+    const link = `<a class="link" href="${fedexLink(num)}" target="_blank" rel="noopener">Abrir en FedEx</a>`;
+    const cells = [
+      num, "—", "—", "—", "—", "—",
+      `<span class="muted">Sin API. ${link}</span>`
+    ];
+    cells.forEach((c, i) => {
+      const td = document.createElement("td");
+      if (i === 6) td.innerHTML = c; else td.textContent = c;
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+}
+
+$("#go").addEventListener("click", async () => {
+  const lines = parseLines();
+  if (!lines.length) { alert("Pega al menos un número de guía."); return; }
+
+  $("#hint").textContent = "Consultando… (puede tardar unos segundos si son muchas)";
   $("#go").disabled = true;
+
   try {
-    // Determine API endpoint based on origin: if running from file:// fallback to local server
-    const API = location.origin.startsWith("http")
-      ? "/api/track"
-      : "http://localhost:3000/api/track";
-    const res = await fetch(API, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ numbers: lines }),
-    });
-    const json = await res.json();
-    const tbody = $("#tbl tbody");
-    tbody.innerHTML = "";
-    (json.results || []).forEach((r) => {
-      const tr = document.createElement("tr");
-      const td = (text) => {
-        const x = document.createElement("td");
-        x.textContent = text ?? "";
-        return x;
-      };
-      tr.appendChild(td(r.trackingNumber));
-      tr.appendChild(td(r.ok ? r.lastStatus : "—"));
-      tr.appendChild(td(r.ok ? r.lastUpdateLocal : "—"));
-      tr.appendChild(td(r.ok ? r.location : "—"));
-      tr.appendChild(td(r.ok ? (r.delivered ? "Sí" : "No") : "—"));
-      tr.appendChild(td(r.ok ? r.service : ""));
-      const msg = document.createElement("td");
-      msg.innerHTML = r.ok
-        ? `<span class="ok">OK</span>`
-        : `<span class="err">${r.error}</span>`;
-      tr.appendChild(msg);
-      tbody.appendChild(tr);
-    });
+    // 1) Intenta API (funcionará si tienes backend corriendo)
+    const json = await tryTrackAPI(lines);
+    paintRowsFromAPI(json.results || []);
     $("#out").style.display = "block";
-    $("#hint").textContent = `Listo: ${json.count} guías`;
+    $("#hint").textContent = `Listo: ${(json.count ?? (json.results||[]).length)} guías`;
   } catch (e) {
-    $("#hint").textContent = "Error consultando. Reintenta.";
-    alert(e);
+    // 2) Fallback estático para GitHub Pages
+    paintRowsStatic(lines);
+    $("#out").style.display = "block";
+    $("#hint").textContent = "Modo estático: se generaron enlaces a FedEx (sin API).";
+    console.warn(e);
   } finally {
     $("#go").disabled = false;
   }
 });
 
-// Export results to CSV
+// Exportar CSV.
+// Si hubo datos de API, se exportan columnas completas;
+// en modo estático exporta solo la primera columna (número de guía).
 $("#csv").addEventListener("click", () => {
-  const rows = [
-    [
-      "trackingNumber",
-      "status",
-      "fechaHoraLocal",
-      "lugar",
-      "entregado",
-      "servicio",
-      "mensaje",
-    ],
-  ];
-  document.querySelectorAll("#tbl tbody tr").forEach((tr) => {
+  const rows = [["trackingNumber","status","fechaHoraLocal","lugar","entregado","servicio","mensaje"]];
+  const trs = document.querySelectorAll("#tbl tbody tr");
+  if (!trs.length) { alert("No hay resultados para exportar."); return; }
+
+  trs.forEach(tr => {
     const tds = tr.querySelectorAll("td");
-    rows.push(
-      Array.from(tds).map((td) =>
-        (td.textContent || "").replace(/\s+/g, " ").trim()
-      )
-    );
+    const arr = Array.from(tds).map((td,i) => {
+      // En modo estático la 7ma celda tiene HTML. Extrae texto plano.
+      return i === 6 ? (td.textContent || "").trim()
+                     : (td.textContent || "").replace(/\s+/g, " ").trim();
+    });
+    rows.push(arr);
   });
-  const csv = rows
-    .map((r) => r.map((v) => `"${(v || "").replace(/"/g, '""')}"`).join(","))
-    .join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+
+  const csv = rows.map(r => r.map(v => `"${(v||"").replace(/"/g,'""')}"`).join(",")).join("\n");
+  const blob = new Blob([csv], { type:"text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  a.href = url;
-  a.download = "fedex_ultimos_estatus.csv";
-  a.click();
+  a.href = url; a.download = "fedex_ultimos_estatus.csv"; a.click();
   URL.revokeObjectURL(url);
+});
+
+// Abrir hasta 10 enlaces en nuevas pestañas (útil en modo estático)
+$("#openAll").addEventListener("click", () => {
+  const lines = parseLines().slice(0, 10);
+  if (!lines.length) { alert("Pega al menos un número de guía."); return; }
+  lines.forEach(n => window.open(fedexLink(n), "_blank","noopener"));
 });
 </script>
 </body>
